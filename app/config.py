@@ -9,9 +9,9 @@ class Settings:
     EBAY_APP_ID: str = os.getenv("EBAY_APP_ID", "")
     EBAY_CERT_ID: str = os.getenv("EBAY_CERT_ID", "")
     
-    # API Endpoints (Sandbox)
-    EBAY_OAUTH_TOKEN_ENDPOINT: str = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-    EBAY_BROWSE_API_ENDPOINT: str = "https://api.sandbox.ebay.com/buy/browse/v1"
+    # API Endpoints (Production)
+    EBAY_OAUTH_TOKEN_ENDPOINT: str = "https://api.ebay.com/identity/v1/oauth2/token"
+    EBAY_BROWSE_API_ENDPOINT: str = "https://api.ebay.com/buy/browse/v1"
     
     # API Settings
     EBAY_MARKET_ID: str = "EBAY_US"
