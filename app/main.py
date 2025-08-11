@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
+import hashlib
 
 from app.config import settings
 from app.models import SearchResponse, ErrorResponse
@@ -84,6 +85,86 @@ def health_check():
     return {
         "status": "healthy",
         "ebay_configured": settings.is_configured
+    }
+
+@app.get("/webhooks/account-deletion")
+async def validate_webhook(
+    challenge_code: str = Query(..., description="eBay challenge code for validation")
+):
+    """Handle eBay webhook validation challenge."""
+    try:
+        # Get the endpoint URL from config
+        endpoint_url = settings.WEBHOOK_ENDPOINT_URL
+        
+        # Create the string to hash: challenge_code + verification_token + endpoint_url
+        string_to_hash = challenge_code + settings.WEBHOOK_VERIFICATION_TOKEN + endpoint_url
+        
+        # Generate SHA256 hash
+        hash_object = hashlib.sha256(string_to_hash.encode())
+        challenge_response = hash_object.hexdigest()
+        
+        logger.info(f"Webhook validation: challenge_code={challenge_code}, response={challenge_response}")
+        
+        # Return the required JSON response
+        return {
+            "challengeResponse": challenge_response
+        }
+        
+    except Exception as e:
+        logger.error(f"Error validating webhook: {e}")
+        raise HTTPException(status_code=500, detail="Failed to validate webhook")
+
+@app.post("/webhooks/account-deletion")
+async def handle_account_deletion(request: Request):
+    """Handle eBay marketplace account deletion notifications."""
+    try:
+        # Get the raw body and headers
+        body = await request.body()
+        headers = request.headers
+        
+        logger.info(f"Received account deletion webhook: {headers}")
+        
+        # Verify the request is from eBay (basic verification)
+        user_agent = headers.get("user-agent", "")
+        if "ebay" not in user_agent.lower():
+            logger.warning(f"Suspicious webhook request from: {user_agent}")
+        
+        # Parse JSON payload
+        try:
+            data = await request.json()
+            logger.info(f"Account deletion data: {data}")
+        except Exception as e:
+            logger.error(f"Failed to parse webhook JSON: {e}")
+            data = {}
+        
+        # In a real app, you would:
+        # 1. Validate the webhook signature
+        # 2. Delete user data from your database
+        # 3. Update your records
+        
+        # For this fashion recommender, we don't store user data,
+        # so we just log the notification
+        if "userId" in data:
+            logger.info(f"User {data['userId']} account deleted - no action needed")
+        
+        # Return success response to eBay
+        return {
+            "status": "success",
+            "message": "Account deletion notification received",
+            "timestamp": data.get("timestamp", "unknown")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing account deletion webhook: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process webhook")
+
+@app.get("/webhooks/test")
+def webhook_test():
+    """Test endpoint to verify webhook URL is accessible."""
+    return {
+        "status": "ok",
+        "message": "Webhook endpoint is accessible",
+        "verification_token": settings.WEBHOOK_VERIFICATION_TOKEN
     }
 
 if __name__ == "__main__":

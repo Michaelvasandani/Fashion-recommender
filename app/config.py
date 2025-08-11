@@ -23,6 +23,10 @@ class Settings:
     TIMEOUT_SECONDS: int = 30
     TOKEN_EXPIRY_BUFFER: int = 60  # Refresh token 60 seconds before expiry
     
+    # Webhook Settings
+    WEBHOOK_VERIFICATION_TOKEN: str = os.getenv("WEBHOOK_VERIFICATION_TOKEN", "fashionrec_webhook_2025_secure_token_abcd1234efgh5678")
+    WEBHOOK_ENDPOINT_URL: str = os.getenv("WEBHOOK_ENDPOINT_URL", "https://your-app.onrender.com/webhooks/account-deletion")
+    
     @property
     def is_configured(self) -> bool:
         return bool(self.EBAY_APP_ID and self.EBAY_CERT_ID)
