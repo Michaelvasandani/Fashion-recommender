@@ -35,3 +35,17 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Image cache
+image_cache/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# Model cache
+models/
+.cache/
+*.bin
+*.safetensors
