@@ -5,8 +5,9 @@ import logging
 import hashlib
 
 from app.config import settings
-from app.models import SearchResponse, ErrorResponse
+from app.models import SearchResponse, ErrorResponse, RecommendRequest, RecommendResponse, ImageSearchRequest
 from app.services.ebay_client import EbayClient, EbayAPIError
+from app.services.similarity_service import get_similarity_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,10 +32,22 @@ ebay_client = EbayClient()
 def read_root():
     return {
         "message": "Welcome to Secondhand Fashion Recommender API",
+        "description": "AI-powered fashion recommendations using text and visual similarity",
         "endpoints": {
-            "/search": "Search for secondhand items",
-            "/docs": "API documentation"
-        }
+            "/search": "Search with semantic and visual ranking",
+            "/recommend": "Multi-modal recommendations (text/image/both)",
+            "/search/by-image": "Search by image similarity",
+            "/find-similar/{item_id}": "Find items similar to a specific listing",
+            "/docs": "Interactive API documentation",
+            "/health": "Health check"
+        },
+        "features": [
+            "Text embeddings with Sentence-BERT",
+            "Visual embeddings with CLIP",
+            "Combined similarity scoring",
+            "Configurable ranking weights",
+            "Image-based search"
+        ]
     }
 
 @app.get("/search", response_model=SearchResponse)
@@ -192,6 +205,200 @@ def webhook_test():
         "message": "Webhook endpoint is accessible",
         "verification_token": settings.WEBHOOK_VERIFICATION_TOKEN
     }
+
+@app.post("/recommend", response_model=RecommendResponse)
+async def recommend_items(request: RecommendRequest):
+    """
+    Multi-modal recommendation endpoint.
+    Can search by text, image URL, or both.
+    """
+    if not request.query and not request.image_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Either 'query' or 'image_url' must be provided"
+        )
+    
+    try:
+        similarity_service = get_similarity_service()
+        
+        # Determine search strategy
+        if request.query and not request.image_url:
+            # Text-only search
+            logger.info(f"Text-only recommendation for: {request.query}")
+            items = ebay_client.search_items_with_semantic_ranking(
+                query=request.query,
+                limit=request.limit,
+                category_id=request.category_id
+            )
+        
+        elif request.image_url and not request.query:
+            # Image-only search
+            logger.info(f"Image-only recommendation for: {request.image_url}")
+            # First, get some base results to compare against
+            base_query = "fashion clothing"  # Generic query to get items
+            items = ebay_client.search_items(
+                query=base_query,
+                limit=request.limit * 2,  # Get more to filter
+                category_id=request.category_id
+            )
+            # Rank by visual similarity to the query image
+            items = similarity_service.find_similar_by_image(
+                query_image_url=request.image_url,
+                items=items,
+                include_text=False,
+                visual_weight=1.0
+            )[:request.limit]
+        
+        else:
+            # Combined text + image search
+            logger.info(f"Combined recommendation - text: {request.query}, image: {request.image_url}")
+            items = ebay_client.search_items_with_combined_ranking(
+                query=request.query,
+                limit=request.limit,
+                category_id=request.category_id,
+                text_weight=request.text_weight,
+                visual_weight=request.visual_weight
+            )
+        
+        # Add search metadata
+        search_metadata = {
+            "query": request.query,
+            "image_url": request.image_url,
+            "text_weight": request.text_weight,
+            "visual_weight": request.visual_weight,
+            "category_id": request.category_id,
+            "result_count": len(items)
+        }
+        
+        return RecommendResponse(
+            recommendations=items,
+            search_metadata=search_metadata,
+            total_results=len(items)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in recommendation: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/search/by-image", response_model=RecommendResponse)
+async def search_by_image(request: ImageSearchRequest):
+    """
+    Search for items visually similar to a provided image.
+    """
+    try:
+        similarity_service = get_similarity_service()
+        
+        # Get a broad set of fashion items
+        base_query = "fashion clothing accessories"
+        items = ebay_client.search_items(
+            query=base_query,
+            limit=request.limit * 3,  # Get extra to filter down
+            category_id=None  # Search across categories
+        )
+        
+        # Rank by visual similarity
+        if request.include_text:
+            # Use both visual and some text signal
+            visual_weight = 1.0 - request.text_weight
+            items = similarity_service.find_similar_by_image(
+                query_image_url=request.image_url,
+                items=items,
+                include_text=True,
+                text_weight=request.text_weight,
+                visual_weight=visual_weight
+            )
+        else:
+            # Pure visual search
+            items = similarity_service.find_similar_by_image(
+                query_image_url=request.image_url,
+                items=items,
+                include_text=False,
+                visual_weight=1.0
+            )
+        
+        # Return top matches
+        items = items[:request.limit]
+        
+        search_metadata = {
+            "image_url": request.image_url,
+            "include_text": request.include_text,
+            "text_weight": request.text_weight if request.include_text else 0,
+            "visual_weight": 1.0 - request.text_weight if request.include_text else 1.0,
+            "result_count": len(items)
+        }
+        
+        return RecommendResponse(
+            recommendations=items,
+            search_metadata=search_metadata,
+            total_results=len(items)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in image search: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/find-similar/{item_id}", response_model=RecommendResponse)
+async def find_similar_items(
+    item_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    text_weight: float = Query(0.3, ge=0, le=1),
+    visual_weight: float = Query(0.7, ge=0, le=1)
+):
+    """
+    Find items similar to a specific eBay item.
+    Uses the item's title and image for similarity matching.
+    """
+    try:
+        # First, we need to get the item details
+        # For now, we'll search for the item ID and hope it comes up
+        # In a real implementation, we'd have a get_item_by_id method
+        
+        # Search for items and find the target
+        # This is a workaround - ideally we'd fetch the specific item
+        search_query = item_id  # Try searching by ID
+        all_items = ebay_client.search_items(query=search_query, limit=50)
+        
+        # Find the target item
+        target_item = None
+        for item in all_items:
+            if item.item_id == item_id:
+                target_item = item
+                break
+        
+        if not target_item:
+            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+        
+        # Search for similar items using the target's title
+        similar_items = ebay_client.search_items_with_combined_ranking(
+            query=target_item.title,
+            limit=limit + 1,  # Get extra to exclude the original
+            text_weight=text_weight,
+            visual_weight=visual_weight
+        )
+        
+        # Remove the original item from results
+        similar_items = [item for item in similar_items if item.item_id != item_id][:limit]
+        
+        search_metadata = {
+            "source_item_id": item_id,
+            "source_item_title": target_item.title,
+            "source_item_image": target_item.image_url,
+            "text_weight": text_weight,
+            "visual_weight": visual_weight,
+            "result_count": len(similar_items)
+        }
+        
+        return RecommendResponse(
+            recommendations=similar_items,
+            search_metadata=search_metadata,
+            total_results=len(similar_items)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error finding similar items: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
