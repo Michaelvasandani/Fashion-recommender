@@ -2,6 +2,7 @@ import requests
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
+import time
 
 from app.config import settings
 from app.models import EbayItem
@@ -156,6 +157,113 @@ class EbayClient:
         except Exception as e:
             logger.error(f"Error parsing item: {str(e)}")
             return None
+    
+    def search_items_with_combined_ranking(
+        self,
+        query: str,
+        limit: int = 50,
+        category_id: Optional[str] = None,
+        offset: int = 0,
+        text_weight: float = 0.5,
+        visual_weight: float = 0.5,
+        use_visual: bool = True
+    ) -> List[EbayItem]:
+        """Search items and rank them by combined text and visual similarity."""
+        from app.services.similarity_service import get_similarity_service
+        
+        start_time = time.time()
+        
+        # Get regular search results
+        items = self.search_items(query, limit, category_id, offset)
+        
+        if not items or not settings.ENABLE_SEMANTIC_SEARCH:
+            return items
+        
+        try:
+            # Get similarity service
+            similarity_service = get_similarity_service()
+            
+            # Calculate combined similarities
+            if use_visual and settings.ENABLE_VISUAL_SEARCH:
+                logger.info(f"Using combined text+visual ranking for {len(items)} items")
+                items = similarity_service.calculate_combined_similarity(
+                    query=query,
+                    items=items,
+                    text_weight=text_weight,
+                    visual_weight=visual_weight,
+                    use_async=False  # Could make this configurable
+                )
+            else:
+                # Fall back to text-only ranking
+                logger.info(f"Using text-only ranking for {len(items)} items")
+                items = self.search_items_with_semantic_ranking(
+                    query, limit, category_id, offset
+                )
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Combined ranking completed in {elapsed:.2f}s")
+            
+            return items
+            
+        except Exception as e:
+            logger.error(f"Error in combined ranking: {str(e)}")
+            logger.warning("Falling back to text-only semantic ranking")
+            return self.search_items_with_semantic_ranking(
+                query, limit, category_id, offset
+            )
+    
+    def search_items_with_semantic_ranking(
+        self,
+        query: str,
+        limit: int = 50,
+        category_id: Optional[str] = None,
+        offset: int = 0
+    ) -> List[EbayItem]:
+        """Search items and rank them by semantic similarity."""
+        from app.services.embedding_service import get_embedding_service
+        
+        start_time = time.time()
+        
+        # Get regular search results
+        items = self.search_items(query, limit, category_id, offset)
+        
+        if not items or not settings.ENABLE_SEMANTIC_SEARCH:
+            return items
+        
+        try:
+            # Get embedding service
+            embedding_service = get_embedding_service()
+            
+            # Extract titles
+            titles = [item.title for item in items]
+            
+            # Generate embeddings
+            logger.info(f"Generating embeddings for {len(titles)} items")
+            query_embedding = embedding_service.encode_text(query)
+            title_embeddings = embedding_service.encode_batch(titles)
+            
+            # Calculate similarities
+            similarities = embedding_service.calculate_similarities(
+                query_embedding,
+                title_embeddings
+            )
+            
+            # Add scores to items
+            for item, score in zip(items, similarities):
+                item.similarity_score = float(score)
+            
+            # Sort by similarity (highest first)
+            items.sort(key=lambda x: x.similarity_score or 0, reverse=True)
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Semantic ranking completed in {elapsed:.2f}s")
+            
+            return items
+            
+        except Exception as e:
+            logger.error(f"Error in semantic ranking: {str(e)}")
+            logger.warning("Falling back to regular search results")
+            return items
     
     def get_total_results(self, query: str, category_id: Optional[str] = None) -> int:
         """Get total number of results for a query."""

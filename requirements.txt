@@ -68,3 +68,6 @@ typing_extensions==4.14.1
 tzdata==2025.2
 urllib3==2.5.0
 uvicorn==0.35.0
+Pillow==11.3.0
+aiohttp==3.10.5
+clip-retrieval==2.36.1

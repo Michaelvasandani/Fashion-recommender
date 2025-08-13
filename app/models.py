@@ -14,6 +14,7 @@ class EbayItem(BaseModel):
     shipping_cost: Optional[float] = None
     listing_type: Optional[str] = None
     end_time: Optional[datetime] = None
+    similarity_score: Optional[float] = Field(None, description="Semantic similarity score (0-1)")
     
     class Config:
         json_encoders = {

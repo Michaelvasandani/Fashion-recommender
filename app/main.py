@@ -42,7 +42,11 @@ async def search_items(
     q: str = Query(..., description="Search query (e.g., 'Zara jacket')", min_length=1),
     limit: int = Query(25, description="Number of results to return", ge=1, le=200),
     page: int = Query(1, description="Page number", ge=1),
-    category_id: Optional[str] = Query(None, description="eBay category ID")
+    category_id: Optional[str] = Query(None, description="eBay category ID"),
+    semantic_ranking: bool = Query(True, description="Enable semantic ranking of results"),
+    visual_ranking: bool = Query(True, description="Enable visual similarity ranking"),
+    text_weight: float = Query(0.5, description="Weight for text similarity (0-1)", ge=0, le=1),
+    visual_weight: float = Query(0.5, description="Weight for visual similarity (0-1)", ge=0, le=1)
 ):
     if not settings.is_configured:
         raise HTTPException(
@@ -51,17 +55,39 @@ async def search_items(
         )
     
     try:
-        logger.info(f"Searching for: {q}, limit: {limit}, page: {page}")
+        logger.info(f"Searching for: {q}, limit: {limit}, page: {page}, semantic: {semantic_ranking}, visual: {visual_ranking}")
         
         # Calculate offset from page number
         offset = (page - 1) * limit
         
-        items = ebay_client.search_items(
-            query=q,
-            limit=limit,
-            offset=offset,
-            category_id=category_id
-        )
+        # Determine which ranking method to use
+        if semantic_ranking and visual_ranking:
+            # Use combined text + visual ranking
+            items = ebay_client.search_items_with_combined_ranking(
+                query=q,
+                limit=limit,
+                offset=offset,
+                category_id=category_id,
+                text_weight=text_weight,
+                visual_weight=visual_weight,
+                use_visual=True
+            )
+        elif semantic_ranking:
+            # Use text-only semantic ranking
+            items = ebay_client.search_items_with_semantic_ranking(
+                query=q,
+                limit=limit,
+                offset=offset,
+                category_id=category_id
+            )
+        else:
+            # Use basic eBay search without ranking
+            items = ebay_client.search_items(
+                query=q,
+                limit=limit,
+                offset=offset,
+                category_id=category_id
+            )
         
         total_results = ebay_client.get_total_results(q, category_id)
         
